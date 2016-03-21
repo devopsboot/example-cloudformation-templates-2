@@ -1,0 +1,71 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "elastic cache instance for nOps",
+  "Outputs": {
+    "RedisCluster": {
+      "Description": "RedisCluster created",
+      "Value": {
+        "Ref": "ElasticacheCluster"
+      }
+    }
+  },
+  "Parameters": {
+    "VpcId": {
+      "Type": "String"
+    },
+    "ElasticacheSecurityGroup": {
+      "Type": "String"
+    },
+    "PublicSubnet1": {
+      "Type": "String"
+    },
+    "PublicSubnet2": {
+      "Type": "String"
+    },
+    "Availabilityzone": {
+      "Type": "String"
+    },
+    "RedisInstanceType" : {
+      "Description" : "Redis instance type",
+      "Type" : "String",
+      "Default" : "cache.t2.small",
+      "ConstraintDescription" : "must be a valid Redis instance type."
+    }
+  },
+  "Resources": {
+    "SubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Cache Subnet Group",
+        "SubnetIds": [
+          {
+            "Ref": "PublicSubnet1"
+          },
+          {
+            "Ref": "PublicSubnet2"
+          }
+        ]
+      }
+    },
+    "ElasticacheCluster": {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "CacheSubnetGroupName": {
+          "Ref": "SubnetGroup"
+        },
+        "CacheNodeType": {  "Ref": "RedisInstanceType"  },
+        "Engine": "redis",
+        "NumCacheNodes": "1",
+        "PreferredAvailabilityZone": {
+          "Ref": "Availabilityzone"
+        },
+        "AutoMinorVersionUpgrade": "true",
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "ElasticacheSecurityGroup"
+          }
+        ]
+      }
+    }
+  }
+}

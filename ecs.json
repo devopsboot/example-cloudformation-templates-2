@@ -1,0 +1,276 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Template for creating the Web Autoscaling Group",
+  "Parameters" : {
+    "KeyName": {
+      "Type": "AWS::EC2::KeyPair::KeyName"
+    },
+    "AvailabilityZone1": {
+      "Type": "String"
+    },
+    "AvailabilityZone2": {
+      "Type": "String"
+    },
+    "PublicSubnet1" : {
+      "Type" : "String"
+    },
+    "PublicSubnet2" : {
+      "Type" : "String"
+    },
+    "VpcId" : {
+      "Type" : "String"
+    },
+    "Stackname" : {
+      "Type" : "String"
+    },
+    "ECSInstanceSecurityGroup" : {
+      "Type" : "String"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "RedisCluster" : {
+      "Type" : "String"
+    },
+    "MongoDBAddress" : {
+      "Default" : "127.0.0.1",
+      "Type" : "String"
+    },
+    "Settings" : {
+      "Description" : "Path to setting file for App",
+      "Default" : "settings/prod_config.py",
+      "Type" : "String"
+    },
+    "DockerImage" : {
+      "Default" : "",
+      "Type" : "String"
+    },
+    "DockerImageTag" : {
+      "Default" : "latest",
+      "Type" : "String"
+    },
+
+    "DesiredCapacity": {
+      "Type": "Number",
+      "Default" : 1,
+      "Description": "Number of instances to launch in your ECS cluster"
+    },
+    "WorkerDesiredCount" : {
+      "Default" : 1,
+      "Type" : "Number"
+    }
+
+  },
+
+  "Mappings" : {
+    "AWSRegionToAMI" : {
+      "us-east-1"      : { "AMIID" : "ami-33b48a59" },
+      "us-west-1"      : { "AMIID" : "ami-26f78746" },
+      "us-west-2"      : { "AMIID" : "ami-65866a05" }
+
+    }
+  },
+
+  "Resources": {
+
+    "ECSCluster": {
+      "Type": "AWS::ECS::Cluster"
+    },  
+
+    "service": {
+      "Type": "AWS::ECS::Service",
+      "Properties" : {
+        "Cluster": {"Ref": "ECSCluster"},
+        "DesiredCount": {"Ref": "WorkerDesiredCount"},
+        "TaskDefinition" : {"Ref":"WorkersTaskDefintion"}
+      }
+    },  
+
+    "WorkersTaskDefintion": {
+      "Type": "AWS::ECS::TaskDefinition",
+      "Properties" : {
+        "ContainerDefinitions" : [
+          {
+            "Name": "busybox",
+            "Cpu": 10,
+            "Command": [
+              "/bin/sh -c \"while true; do echo '<html> <head> <title>Amazon ECS Sample App</title> <style>body {margin-top: 40px; background-color: #333;} </style> </head><body> <div style=color:white;text-align:center> <h1>Amazon ECS Sample App</h1> <h2>Congratulations!</h2> <p>Your application is now running on a container in Amazon ECS.</p>' > top; /bin/date > date ; echo '</div></body></html>' > bottom; cat top date bottom > /usr/local/apache2/htdocs/index.html ; sleep 1; done\""
+            ],      
+            "EntryPoint": [ "sh", "-c"],
+            "Essential": false,
+            "Image": "busybox",
+            "Memory": 300,
+            "Essential": "true"
+          }
+        ]
+      }
+    },    
+
+
+    "ECSAutoScalingGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [
+          {
+            "Ref" : "AvailabilityZone1" 
+          }, 
+          { 
+            "Ref" : "AvailabilityZone2" 
+          }
+        ],
+        "VPCZoneIdentifier" : [
+          {
+            "Ref" : "PublicSubnet1" 
+          }, 
+          { 
+            "Ref" : "PublicSubnet2" 
+          }
+        ],
+        "LaunchConfigurationName" : { "Ref" : "ContainerInstances" },
+        "MinSize" : { "Ref" : "DesiredCapacity" },
+        "MaxSize" : { "Ref" : "DesiredCapacity" },
+        "DesiredCapacity" : { "Ref" : "DesiredCapacity" },
+        "Tags" : [
+          {"Key" : "Name", "Value" : { "Fn::Join" : [ "-", [ { "Ref": "Stackname" }, "ECSInstance"] ] }, "PropagateAtLaunch" : "true"}
+        ]
+      }
+    },   
+
+    "ContainerInstances": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+          
+       
+            "files" : {
+              "/etc/ecs/ecs.config" : {
+                "content" : { "Fn::Join": [ "", [
+                "ECS_CLUSTER=", { "Ref": "ECSCluster" }, "\n",
+                ]]},
+                "mode"    : "000600",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/var/spool/cron/root" : {
+                "content" : { "Fn::Join" : ["", [
+                  "*/5 * * * * /usr/sbin/ntpdate -s time.nist.gov &> /dev/null\n",
+                  "*/5 * * * * /opt/aws/bin/cfn-hup --no-daemon &> /dev/null\n"
+                ]]},
+                "mode"    : "000600",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.WebLaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource ContainerInstances ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionToAMI", { "Ref" : "AWS::Region" }, "AMIID" ] },
+        "InstanceType"   : { "Ref" : "InstanceType" },
+        "IamInstanceProfile": { "Ref": "EC2InstanceProfile" },
+        "KeyName"        : { "Ref" : "KeyName" },
+        "SecurityGroups" : [ { "Ref" : "ECSInstanceSecurityGroup" } ],
+        "AssociatePublicIpAddress": "true",
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -ex\n",
+
+          "# Install cfn bootstraping tools\n",
+          "yum update -y\n",
+          "yum -y install python-setuptools python-pip\n",
+          "easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+
+
+          "/usr/local/bin/cfn-init -v -s ", { "Ref" : "AWS::StackName" }, " -r ContainerInstances ",
+          "    --region ", { "Ref" : "AWS::Region" }, " \n",
+
+
+          "/usr/local/bin/cfn-signal -e $? ",
+          "         --stack ", { "Ref" : "AWS::StackName" },
+          "         --resource ECSAutoScalingGroup ",
+          "         --region ", { "Ref" : "AWS::Region" }, "\n"
+        ]]}}
+      }
+    }, 
+
+    "EC2Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "ecs-service",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ecs:CreateCluster",
+                    "ecs:RegisterContainerInstance",
+                    "ecs:DeregisterContainerInstance",
+                    "ecs:DiscoverPollEndpoint",
+                    "ecs:Submit*",
+                    "ecs:Poll"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },    
+    
+    "EC2InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "EC2Role"
+          }
+        ]
+      }
+    }
+  }
+}

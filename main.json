@@ -1,0 +1,298 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Top level template",
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern": "[\\x20-\\x7E]*",
+      "ConstraintDescription": "can contain only ASCII characters."
+    },
+    "VpcAvailabilityZone1": {
+      "Type": "String",
+      "Default": "us-west-2a"
+    },
+    "VpcAvailabilityZone2": {
+      "Type": "String",
+      "Default": "us-west-2c"
+    },
+    "vpccidr": {
+      "Type": "String",
+      "Default": "10.2.0.0/16"
+    },
+    "pubcidr1": {
+      "Type": "String",
+      "Default": "10.2.1.0/24"
+    },
+    "pubcidr2": {
+      "Type": "String",
+      "Default": "10.2.2.0/24"
+    },
+    "RedisInstanceType" : {
+      "Description" : "Redis instance type",
+      "Type" : "String",
+      "Default" : "cache.t2.small",
+      "AllowedValues" : [ "cache.t2.small", "cache.t2.medium", "cache.m3.medium"],
+      "ConstraintDescription" : "must be a valid Redis instance type."
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t2.micro", "t2.small", "t2.medium", "t2.large", "c4.large", "c4.xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "ECSInstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t2.micro", "t2.small", "t2.medium", "t2.large", "c4.large", "c4.xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "MaxSizeASG" : {
+      "Default" : 1,
+      "Type" : "Number"
+    },
+    "MinSizeASG" : {
+      "Default" : 1,
+      "Type" : "Number"
+    },
+    "MongoDBAddress" : {
+      "Default" : "127.0.0.1",
+      "Type" : "String"
+    },
+    "DockerImage" : {
+      "Default" : "xxxxxxxx",
+      "Type" : "String"
+    },
+    "DockerImageTag" : {
+      "Default" : "latest",
+      "Type" : "String"
+    },
+    "ECSDesiredCapacity": {
+      "Type": "Number",
+      "Default" : "1",
+      "Description": "Number of instances to launch in your ECS cluster"
+    },
+    "ECSWorkerDesiredCount" : {
+      "Default" : 1,
+      "Type" : "Number"
+    }
+  },
+  "Resources": {
+    "vpcstack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3-us-west-2.amazonaws.com/xxxxxxxxxxxxxxxxxx/vpc.json",
+        "Parameters": {
+          "pubcidr1": {
+            "Ref": "pubcidr1"
+          },
+          "pubcidr2": {
+            "Ref": "pubcidr2"
+          },
+          "vpccidr": {
+            "Ref": "vpccidr"
+          },
+          "KeyName": {
+            "Ref": "KeyName"
+          },
+          "Stackname" : { 
+            "Ref" : "AWS::StackName"
+          },
+          "AvailabilityZone1": {
+            "Ref": "VpcAvailabilityZone1"
+          },
+          "AvailabilityZone2": {
+            "Ref": "VpcAvailabilityZone2"
+          }
+        }
+      }
+    },
+    "redis": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3-us-west-2.amazonaws.com/xxxxxxxxxxxxxxxx/redis.json",
+        "Parameters": {
+          "PublicSubnet1": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub1"
+            ]
+          },
+          "PublicSubnet2": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub2"
+            ]
+          },
+          "VpcId": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.VpcId"
+            ]
+          },
+          "Availabilityzone": {
+            "Ref": "VpcAvailabilityZone1"
+          },
+          "RedisInstanceType": {
+            "Ref": "RedisInstanceType"
+          },
+          "ElasticacheSecurityGroup": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.ElasticacheSecurityGroup"
+            ]
+          }
+        }
+      }
+    },
+    "web": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3-us-west-2.amazonaws.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/web.json",
+        "Parameters": {
+          "PublicSubnet1": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub1"
+            ]
+          },
+          "PublicSubnet2": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub2"
+            ]
+          },
+          "AvailabilityZone1": {
+            "Ref": "VpcAvailabilityZone1"
+          },
+          "AvailabilityZone2": {
+            "Ref": "VpcAvailabilityZone2"
+          },
+          "LoadBalancerSecurityGroup": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.LoadBalancerSecurityGroup"
+            ]
+          },
+          "WebInstanveSecurityGroup": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.WebInstanveSecurityGroup"
+            ]
+          },
+          "VpcId": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.VpcId"
+            ]
+          },
+          "RedisCluster": {
+            "Fn::GetAtt": [
+              "redis",
+              "Outputs.RedisCluster"
+            ]
+          },
+          "KeyName": {
+            "Ref": "KeyName"
+          },
+          "Stackname" : { 
+            "Ref" : "AWS::StackName"
+          },
+          "InstanceType": {
+            "Ref": "InstanceType"
+          },
+          "MaxSizeASG": {
+            "Ref": "MaxSizeASG"
+          },
+          "MinSizeASG": {
+            "Ref": "MinSizeASG"
+          },
+          "MongoDBAddress": {
+            "Ref": "MongoDBAddress"
+          },
+          "DockerImage": {
+            "Ref": "DockerImage"
+          },
+          "DockerImageTag": {
+            "Ref": "DockerImageTag"
+          }
+        }
+      }
+    },
+
+    "ecs": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3-us-west-2.amazonaws.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxx/ecs.json",
+        "Parameters": {
+          "PublicSubnet1": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub1"
+            ]
+          },
+          "PublicSubnet2": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.pubsub2"
+            ]
+          },
+          "AvailabilityZone1": {
+            "Ref": "VpcAvailabilityZone1"
+          },
+          "AvailabilityZone2": {
+            "Ref": "VpcAvailabilityZone2"
+          },
+
+          "ECSInstanceSecurityGroup": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.ECSInstanceSecurityGroup"
+            ]
+          },
+          "VpcId": {
+            "Fn::GetAtt": [
+              "vpcstack",
+              "Outputs.VpcId"
+            ]
+          },
+          "RedisCluster": {
+            "Fn::GetAtt": [
+              "redis",
+              "Outputs.RedisCluster"
+            ]
+          },
+          "KeyName": {
+            "Ref": "KeyName"
+          },
+          "Stackname" : { 
+            "Ref" : "AWS::StackName"
+          },
+          "InstanceType": {
+            "Ref": "ECSInstanceType"
+          },
+          "MongoDBAddress": {
+            "Ref": "MongoDBAddress"
+          },
+          "DockerImage": {
+            "Ref": "DockerImage"
+          },
+          "DockerImageTag": {
+            "Ref": "DockerImageTag"
+          },
+          "DesiredCapacity": {
+            "Ref": "ECSDesiredCapacity"
+          },
+          "WorkerDesiredCount": {
+            "Ref": "ECSWorkerDesiredCount"
+          }
+        }
+      }
+    }
+
+  }
+}

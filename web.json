@@ -1,0 +1,660 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Template for creating the Web Autoscaling Group",
+  "Parameters" : {
+    "KeyName": {
+      "Type": "AWS::EC2::KeyPair::KeyName"
+    },
+    "AvailabilityZone1": {
+      "Type": "String"
+    },
+    "AvailabilityZone2": {
+      "Type": "String"
+    },
+    "PublicSubnet1" : {
+      "Type" : "String"
+    },
+    "PublicSubnet2" : {
+      "Type" : "String"
+    },
+    "VpcId" : {
+      "Type" : "String"
+    },
+    "Stackname" : {
+      "Type" : "String"
+    },
+    "LoadBalancerSecurityGroup" : {
+      "Type" : "String"
+    },
+    "WebInstanveSecurityGroup" : {
+      "Type" : "String"
+    },
+    "InstanceAMI" : {
+      "Default" : "ami-63b25203",
+      "Type" : "String"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "MaxSizeASG" : {
+      "Default" : 1,
+      "Type" : "Number"
+    },
+    "MinSizeASG" : {
+      "Default" : 1,
+      "Type" : "Number"
+    },
+    "RedisCluster" : {
+      "Type" : "String"
+    },
+    "MongoDBAddress" : {
+      "Default" : "127.0.0.1",
+      "Type" : "String"
+    },
+    "Settings" : {
+      "Description" : "Path to setting file for App",
+      "Default" : "settings/prod_config.py",
+      "Type" : "String"
+    },
+    "DockerImage" : {
+      "Default" : "",
+      "Type" : "String"
+    },
+    "DockerImageTag" : {
+      "Default" : "latest",
+      "Type" : "String"
+    }
+
+  },
+
+  "Resources": {
+
+
+    "WebServerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [ {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [ "ec2.amazonaws.com" ]
+            },
+            "Action": [ "sts:AssumeRole" ]
+          } ]
+        },
+        "Path": "/",
+        "Policies": [ {
+          "PolicyName": "WebServerPolicy",
+          "PolicyDocument": {
+            "Statement": [ {
+              "Effect": "Allow",
+              "Action": [
+                "elasticache:DescribeCacheClusters",
+                "s3:*"
+              ],
+              "Resource": "*"
+            } ]
+          }
+        } ]
+      }
+    },
+    "WebServerInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ {
+          "Ref": "WebServerRole"
+        } ]
+      }
+    },
+
+
+
+
+
+    "ElasticLoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "LoadBalancerName": {
+          "Fn::Join": [
+            "-",
+            [
+              {
+                "Ref": "Stackname"
+              },
+              "ElasticLoadBalancer"
+            ]
+          ]
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSecurityGroup"
+          }
+        ],
+        "Subnets": [
+          {
+            "Ref": "PublicSubnet1"
+          },
+          {
+            "Ref": "PublicSubnet2"
+          }
+        ],
+        "Listeners": [
+          {
+            "LoadBalancerPort": "80",
+            "InstancePort": "80",
+            "Protocol": "HTTP"
+          }
+        ],
+        "ConnectionDrainingPolicy": {
+          "Enabled": true,
+          "Timeout": 10
+        },
+        "HealthCheck": {
+          "Target": "HTTP:80/",
+          "HealthyThreshold": "3",
+          "UnhealthyThreshold": "5",
+          "Interval": "9",
+          "Timeout": "6"
+        }
+      }
+    },
+
+
+
+
+
+    "WebLaunchConfig" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Authentication":{
+          "S3AccessCreds":{
+            "type":"S3",
+            "roleName":{
+              "Ref":"WebServerRole"
+            }
+          }
+        },
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "InstallAndRun" : [ "Init", "Install", "Launch" ]
+          },
+          "Init" : {
+            "files" : {
+              "/etc/yum.repos.d/docker.repo" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[dockerrepo]\n",
+                  "name=Docker Repository\n",
+                  "baseurl=https://yum.dockerproject.org/repo/main/centos/6/\n",
+                  "enabled=1\n",
+                  "gpgcheck=1\n",
+                  "gpgkey=https://yum.dockerproject.org/gpg\n"
+                ]]},
+                "mode"    : "000644",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/root/deploy.sh" : {
+                "source":"https://s3-us-west-2.amazonaws.com/xxxxxxdeploy.sh",
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root",
+                "authentication":"S3AccessCreds"
+              }
+            }
+          },
+
+
+
+          "Install" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/var/spool/cron/root" : {
+                "content" : { "Fn::Join" : ["", [
+                  "*/5 * * * * /usr/sbin/ntpdate -s time.nist.gov &> /dev/null\n",
+                  "*/5 * * * * /opt/aws/bin/cfn-hup --no-daemon &> /dev/null\n"
+                ]]},
+                "mode"    : "000600",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.WebLaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource WebLaunchConfig ",
+                  "         --configsets InstallAndRun ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            }, 
+            "packages" : {
+              "yum" : {
+                "docker-engine" : [],
+                "jq" : [],
+                "ntp" : []
+              }
+            },
+            "services" : {
+              "sysvinit" : {  
+                "docker"  : { "enabled" : "true", "ensureRunning" : "true" },
+                "cfn-hup" : { "enabled" : "false", "ensureRunning" : "false"}
+              }
+            }
+          },
+
+
+
+          "Launch" : {
+            "commands" : {
+              "run Server Docker container" : {
+                  "command" : { "Fn::Join" : ["", [
+                    "export REDISADDRESS=$(aws elasticache describe-cache-clusters ",
+                    " --cache-cluster-id ", {"Ref" : "RedisCluster"},
+                    " --show-cache-node-info --region ", { "Ref" : "AWS::Region" },
+                    " | jq --raw-output .CacheClusters[].CacheNodes[].Endpoint.Address); \n",
+                    "export MONGOADDRESS=", { "Ref" : "MongoDBAddress" }, "\n",
+
+                    "export CLUSTER=", { "Ref" : "Stackname" }, "-WebScalingInstance \n",
+                    "export PUBLIC_IP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4) \n",
+                    "export NEW_IMAGE=", { "Ref" : "DockerImage" }, ":", { "Ref" : "DockerImageTag" }, "\n",
+                    "export OLD_IMAGES=$(docker images -q) \n",
+                    "export SETTINGS=", { "Ref" : "Settings" }, "\n",
+                    "/root/deploy.sh \n"
+                  ]]},
+                  "cwd" : "~",
+                  "ignoreErrors" : "false"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "IamInstanceProfile": { "Ref": "WebServerInstanceProfile" },
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Ref" : "InstanceAMI" },
+        "InstanceMonitoring" : "true",
+        "SecurityGroups" : [ { "Ref" : "WebInstanveSecurityGroup" } ],
+        "AssociatePublicIpAddress": "true",
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -ex\n",
+
+          "# Install cfn bootstraping tools\n",
+          "yum update -y\n",
+          "yum -y install python-setuptools python-pip\n",
+          "easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+
+
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  /usr/local/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "/usr/local/bin/cfn-init -v -s ", { "Ref" : "AWS::StackName" }, " -r WebLaunchConfig ", "-c InstallAndRun",
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+          "# All is well so signal success\n",
+          "/usr/local/bin/cfn-signal -e 0 -r \"Stack setup complete\" '", { "Ref" : "WaitHandle" }, "'\n",
+
+          "#EOF"
+        ]]}}
+      }
+    },
+
+
+
+
+
+
+
+    "WebAutoScalingGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [
+          {
+            "Ref" : "AvailabilityZone1" 
+          }, 
+          { 
+            "Ref" : "AvailabilityZone2" 
+          }
+        ],
+        "VPCZoneIdentifier" : [
+          {
+            "Ref" : "PublicSubnet1" 
+          }, 
+          { 
+            "Ref" : "PublicSubnet2" 
+          }
+        ],
+        "LaunchConfigurationName" : { "Ref" : "WebLaunchConfig" },
+        "MinSize" : { "Ref" : "MinSizeASG" },
+        "MaxSize" : { "Ref" : "MaxSizeASG" },
+        "DesiredCapacity" : { "Ref" : "MinSizeASG" },
+        "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ],
+        "HealthCheckType" : "ELB",
+        "HealthCheckGracePeriod" : 300,
+        "Tags" : [
+            {"Key" : "Name", "Value" : { "Fn::Join" : [ "-", [ { "Ref": "Stackname" }, "WebScalingInstance"] ] }, "PropagateAtLaunch" : "true"}
+        ]
+      }
+    },
+
+
+
+
+
+    "WebServerScaleUpPolicy" : {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Properties" : {
+        "AdjustmentType" : "ChangeInCapacity",
+        "AutoScalingGroupName" : { "Ref" : "WebAutoScalingGroup" },
+        "Cooldown" : "60",
+        "ScalingAdjustment" : "1"
+      }
+    },
+    "WebServerScaleDownPolicy" : {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Properties" : {
+        "AdjustmentType" : "ChangeInCapacity",
+        "AutoScalingGroupName" : { "Ref" : "WebAutoScalingGroup" },
+        "Cooldown" : "60",
+        "ScalingAdjustment" : "-1"
+      }
+    },
+
+    "CPUAlarmHigh": {
+     "Type": "AWS::CloudWatch::Alarm",
+     "Properties": {
+        "AlarmDescription": "Scale-up if CPU > 50% for 10 minutes",
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Statistic": "Average",
+        "Period": "300",
+        "EvaluationPeriods": "2",
+        "Threshold": "50",
+        "AlarmActions": [ { "Ref": "WebServerScaleUpPolicy" } ],
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": { "Ref": "WebAutoScalingGroup" }
+          }
+        ],
+        "ComparisonOperator": "GreaterThanThreshold"
+      }
+    },
+    "CPUAlarmLow": {
+     "Type": "AWS::CloudWatch::Alarm",
+     "Properties": {
+        "AlarmDescription": "Scale-down if CPU < 10% for 10 minutes",
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Statistic": "Average",
+        "Period": "300",
+        "EvaluationPeriods": "2",
+        "Threshold": "10",
+        "AlarmActions": [ { "Ref": "WebServerScaleDownPolicy" } ],
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": { "Ref": "WebAutoScalingGroup" }
+          }
+        ],
+        "ComparisonOperator": "LessThanThreshold"
+      }
+    },
+
+
+
+    "ElasticLoadBalancerChat": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "LoadBalancerName": {
+          "Fn::Join": [
+            "-",
+            [
+              {
+                "Ref": "Stackname"
+              },
+              "ElasticLoadBalancerChat"
+            ]
+          ]
+        },
+        "Instances" : [
+          {
+            "Ref" : "ChatInstance" 
+          }
+        ],
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSecurityGroup"
+          }
+        ],
+        "Subnets": [
+          {
+            "Ref": "PublicSubnet1"
+          },
+          {
+            "Ref": "PublicSubnet2"
+          }
+        ],
+        "Listeners": [
+          {
+            "LoadBalancerPort": "80",
+            "InstancePort": "80",
+            "Protocol": "HTTP"
+          }
+        ],
+        "ConnectionDrainingPolicy": {
+          "Enabled": true,
+          "Timeout": 10
+        },
+        "HealthCheck": {
+          "Target": "HTTP:80/",
+          "HealthyThreshold": "3",
+          "UnhealthyThreshold": "5",
+          "Interval": "9",
+          "Timeout": "6"
+        }
+      }
+    },
+
+    "ChatEIP" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+        "Domain" : "vpc",
+        "InstanceId" : { "Ref" : "ChatInstance" }
+      }
+    },
+
+    "ChatInstance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Metadata" : {
+        "AWS::CloudFormation::Authentication":{
+          "S3AccessCreds":{
+            "type":"S3",
+            "roleName":{
+              "Ref":"WebServerRole"
+            }
+          }
+        },
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "InstallAndRun" : [ "Init", "Install", "Launch" ]
+          },
+          "Init" : {
+            "files" : {
+              "/etc/yum.repos.d/docker.repo" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[dockerrepo]\n",
+                  "name=Docker Repository\n",
+                  "baseurl=https://yum.dockerproject.org/repo/main/centos/6/\n",
+                  "enabled=1\n",
+                  "gpgcheck=1\n",
+                  "gpgkey=https://yum.dockerproject.org/gpg\n"
+                ]]},
+                "mode"    : "000644",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/root/deploy.sh" : {
+                "source":"https://s3-us-west-2.amazonaws.com/chat-deploy.sh",
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root",
+                "authentication":"S3AccessCreds"
+              }
+            }
+          },
+
+
+
+          "Install" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/var/spool/cron/root" : {
+                "content" : { "Fn::Join" : ["", [
+                  "*/5 * * * * /usr/sbin/ntpdate -s time.nist.gov &> /dev/null\n",
+                  "*/5 * * * * /opt/aws/bin/cfn-hup --no-daemon &> /dev/null\n"
+                ]]},
+                "mode"    : "000600",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.WebLaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource ChatInstance ",
+                  "         --configsets InstallAndRun ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            }, 
+            "packages" : {
+              "yum" : {
+                "docker-engine" : [],
+                "jq" : [],
+                "ntp" : []
+              }
+            },
+            "services" : {
+              "sysvinit" : {  
+                "docker"  : { "enabled" : "true", "ensureRunning" : "true" },
+                "cfn-hup" : { "enabled" : "false", "ensureRunning" : "false"}
+              }
+            }
+          },
+
+
+
+          "Launch" : {
+            "commands" : {
+              "run Server Docker container" : {
+                  "command" : { "Fn::Join" : ["", [
+
+                   "# Helper function\n",
+                    "function error_exit\n",
+                    "{\n",
+                    "  /usr/local/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+                    "  exit 1\n",
+                    "}\n",
+
+
+                    "export REDISADDRESS=$(aws elasticache describe-cache-clusters ",
+                    " --cache-cluster-id ", {"Ref" : "RedisCluster"},
+                    " --show-cache-node-info --region ", { "Ref" : "AWS::Region" }, 
+                    " | jq --raw-output .CacheClusters[].CacheNodes[].Endpoint.Address); \n",
+                    "export MONGOADDRESS=", { "Ref" : "MongoDBAddress" }, "\n",
+
+                    "export CLUSTER=", { "Ref" : "Stackname" }, "-ChatInstance \n",
+                    "export PUBLIC_IP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4) \n",
+                    "export NEW_IMAGE=", { "Ref" : "DockerImage" }, ":", { "Ref" : "DockerImageTag" }, "\n",
+                    "export OLD_IMAGES=$(docker images -q) \n",
+                    "export SETTINGS=", { "Ref" : "Settings" }, "\n",
+                    "/root/deploy.sh \n"
+                  ]]},
+                  "cwd" : "~",
+                  "ignoreErrors" : "false"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "IamInstanceProfile": { "Ref": "WebServerInstanceProfile" },
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Ref" : "InstanceAMI" },
+        "SecurityGroupIds" : [ { "Ref" : "WebInstanveSecurityGroup" } ],
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "SubnetId" : { "Ref" : "PublicSubnet1" },
+        "Tags" : [
+          { "Key" : "Name", "Value" : { "Fn::Join" : [ "-", [ { "Ref": "Stackname" }, "Chat"] ] } }
+        ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -ex\n",
+
+          "# Install cfn bootstraping tools\n",
+          "yum update -y\n",
+          "yum -y install python-setuptools python-pip\n",
+          "easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+
+
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  /usr/local/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "/usr/local/bin/cfn-init -v -s ", { "Ref" : "AWS::StackName" }, " -r ChatInstance ", "-c InstallAndRun",
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+          "# All is well so signal success\n",
+          "/usr/local/bin/cfn-signal -e 0 -r \"Stack setup complete\" '", { "Ref" : "WaitHandle" }, "'\n",
+
+          "#EOF"
+        ]]}}
+      }
+    },
+
+
+
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    }
+  }
+}
